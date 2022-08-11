@@ -7,8 +7,8 @@
 
 import sys
 from os.path import splitext
-from .getzen import get_star, get_starpar
-from .profrest5 import restore
+from ringss_restore_profile.legacy.getzen import get_star, get_starpar
+from ringss_restore_profile.legacy.profrest5 import restore
 from ringss_restore_profile.restore_profile.core import read_json
 
 

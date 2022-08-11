@@ -21,15 +21,24 @@ class ReadMoments(object):
         self.zmat = read_json(self.parameters["profrest"]["zmat"])
         self.star = Star(ringss_parameters_filename)
 
-    def parse_line(self, moments_line: str) -> dict:
+    def __format_profile(self, date: str, hr: str, zen: float, flux: int, profile: dict) -> str:
+
+        s = date + ',' + hr + ',{:.2f}'.format(zen)
+        s = s + ',' + str(flux)
+        s = s + ',  {:.3f}'.format(profile['see2']) + ',{:.3f}'.format(profile['see']) + ',{:.3f}'.format(
+            profile['fsee'])
+        s = s + ',{:.2f}'.format(profile['wind']) + ',{:.3f}'.format(profile['tau0']) + ',{:.3f}'.format(
+            profile['theta0'])
+        s = s + ',  {:.3f}'.format(profile['totvar']) + ',{:.3f}'.format(profile['erms'])
+        for x in profile['prof']:
+            s += ",{:.2f}".format(x)
+        return s
+
+    def __parse_line(self, moments_line: str) -> dict:
         moments_list = moments_line.split(",")
 
-        nz = int(moments_list[5])
-        texp = float(moments_list[2]) * 1e-3
-        gain = float(moments_list[4])
-        nx = int(moments_list[6])
-        cubepar = {'nx': nx, 'nz': nz, 'texp': texp, 'gain': gain, 'date': moments_list[0],
-                   'star': moments_list[1].strip()}
+        cube_par = {'nx': int(moments_list[6]), 'nz': int(moments_list[5]), 'texp': float(moments_list[2]) * 1e-3,
+                    'gain': float(moments_list[4]), 'date': moments_list[0], 'star': moments_list[1].strip()}
 
         mcoef = 20  # fixed for now
 
@@ -50,7 +59,7 @@ class ReadMoments(object):
         rrms = moments_list[k2 + 1]
         meancoef = moments_list[k2 + 2:k2 + 16]
         momentos = {'var': var, 'cov': cov, 'rnoise': rnoise, 'rvar': rrms, 'mcoef': meancoef}
-        data_dict = {'image': {'impar': impar, 'noisepar': noisepar}, 'moments': momentos, 'cubepar': cubepar}
+        data_dict = {'image': {'impar': impar, 'noisepar': noisepar}, 'moments': momentos, 'cube': cube_par}
 
         return data_dict
 
@@ -72,47 +81,62 @@ class ReadMoments(object):
             return None
 
         for line in fh_in:
-            data = self.parse_line(line)
+            data = self.__parse_line(line)
 
-            #print(data)
-            #print(type(data["cubepar"]["star"]))
+            # star_par = get_starpar(date, hr)
+            starpar = self.star.get_starpar(data["cube"]["date"], data["cube"]["star"])
 
-            # Star
-            star_par = self.star.get_starpar(data["cubepar"]["date"], data["cubepar"]["star"])
-
-            data["starpar"] = star_par
+            data["star"] = starpar
 
             profile = self.restore(data)  # returns profile or None
 
             if profile:
-                # data["profile"] = profile # add to the data dictionary
-                # Output
-                s = data['cubepar']['date'] + ',' + data['cubepar']['star'] + ',{:.2f}'.format(data['starpar']['zen'])
-                s = s + ',' + data["image"]["impar"]["flux"]
-                s = s + ',  {:.3f}'.format(profile['see2']) + ',{:.3f}'.format(profile['see']) + ',{:.3f}'.format(
-                    profile['fsee'])
-                s = s + ',{:.2f}'.format(profile['wind']) + ',{:.3f}'.format(profile['tau0']) + ',{:.3f}'.format(
-                    profile['theta0'])
-                s = s + ',  {:.3f}'.format(profile['totvar']) + ',{:.3f}'.format(profile['erms'])
-                for x in profile['prof']:
-                    s += ",{:.2f}".format(x)
-                print(data['cubepar']['date'])
+                print(data['cube']['date'])
+                s = self.__format_profile(data['cube']['date'], data['cube']['star'], data['star']['zen'],
+                                          data["image"]["impar"]["flux"], profile)
                 fh_out.write(s + '\n')
-        fh_in.close()
+
         fh_out.close()
+        fh_in.close()
         print('Processing finished!')
 
-    # Profile restoration. Inputs: dictionaries of parameters, data, weights, and Z-matrix
+    # it is a short version of read_from_file()
+    # intended to use directly by RINGSS
+    # restore profile from moments & cube data (camera)
+    # moments is actually the average moments of all cubes
+    # TODO:
+    #       I need to figure out how to average dictionaries
+    def restore_from_line(self, moments, cube_params):
+        data = moments
+
+        # First add cube parameters to data dictionary
+        data["cube"] = cube_params
+
+        # get star parameters
+        starpar = self.star.get_starpar(cube_params["cube"]["date"], cube_params["cube"]["star"])
+        # Add to data dictionary
+        data["star"] = starpar
+
+        profile = self.restore(data)  # returns profile or None
+
+        if profile:
+            s = self.__format_profile(data['cube']['date'], data['cube']['star'], data['star']['zen'],
+                                      data["image"]["impar"]["flux"], profile)
+            print(data['cube']['date'])
+            print(s)
+            return profile
+
+    # Profile restoration. Input: dictionaries of data
     # Output: dictionary of profile parameters
-    # Before calling restore(), run getzen.py to define the zenith distance and star color in data
-    #
+    # It comes from restore() in profrest5.py
+    # data is a dictionary. Its structure is the same as calc_moments output plus star parameters and cube parameters
     def restore(self, data: dict) -> dict:
         #    print(data["image"]["impar"])
         var = data["moments"]["var"]  # variance of a-coefficients
         cov = data["moments"]["cov"]  # covariance of a-coefficients
         # impar = data["image"]["impar"]  # ring parameters
         # noisepar = data["image"]["noisepar"]  # noise parameters
-        starpar = data["starpar"]  # star parameters
+        starpar = data["star"]  # star parameters
         zen = starpar["zen"]
         bv = starpar["BV"]
         z0 = self.parameters["profrest"]["zgrid"]  # grid of heights representing the turbulence profile
@@ -140,7 +164,7 @@ class ReadMoments(object):
             return
 
         # noise bias, see allcubes5.pro => noisecubes
-        gain = data["cubepar"]["gain"]  # electrons per ADU
+        gain = data["cube"]["gain"]  # electrons per ADU
         eladu = 3.60 * pow(10, -gain / 200)
         noisepar = data["image"]["noisepar"]  # list of 4 numbers
         fluxadu = float(data["image"]["impar"]["flux"])
@@ -228,10 +252,206 @@ class ReadMoments(object):
         heff = pow(np.sum(tmp * prof1) / np.sum(prof1), 0.6)
         theta0 = 205265. * 0.31 * r0 / heff
         # Output dictionary
-        profile_dict = {"z0": z0, "prof": prof1.tolist(), "see": see, "fsee": fsee, "see2": see2, "wind": v2, "erms": erms,
+        profile_dict = {"z0": z0, "prof": prof1.tolist(), "see": see, "fsee": fsee, "see2": see2, "wind": v2,
+                        "erms": erms,
                         "totvar": totvar, "tau0": tau0, "theta0": theta0}
 
         return profile_dict
+
+    # Calculate moments from given data cube
+    # It comes from moments() in cube2.py
+    def calc_moments(self, data_cube):
+        # print("inside Moments()")
+        nz, ny, nx = data_cube.shape  # 2000 64 64
+
+        nstart = 50  # initial average of first 50 frames
+        imav = np.average(data_cube[0:nstart], axis=0)  # average nstart frames
+
+        i = np.indices((nx, nx))  # to create xx and yy vectors
+        yy = i[0] - nx / 2
+        xx = i[1] - nx / 2
+
+        r = np.sqrt(np.square(xx) + np.square(yy))  # distance from center: plt.imshow(xx, cmap='Greys')
+        phi = np.arctan2(yy, xx)  # 2D array of phase # plt.imshow(phi, cmap='Greys')
+
+        # ## Prepare initial wide masks
+        m = 20  # max order of angular signals
+        nsect = 8  # number of sectors for radius calculation
+        rwt = np.zeros((nsect, nx, nx))  # for radius calculation
+        fwt = np.zeros((nsect, nx, nx))  # fluxes in the sectors
+        sect = 2. * np.pi / nsect  # sector width in radians
+
+        for j in range(0, nsect):
+            sector = (phi >= (sect * (j - nsect / 2))) & (phi < (sect * (j + 1 - nsect / 2)))
+            fwt[j] = sector
+            rwt[j] = sector * r
+
+        test = np.zeros((nx, nx))  # test correctness of radial masks
+        for j in range(0, nsect):
+            test += rwt[j] * (j + 1)
+
+        phisect = sect * (np.arange(nsect, dtype=float) - nsect / 2 + 0.5)  # sector angles
+        xsect, ysect = np.cos(phisect), np.sin(phisect)
+
+        backgr = np.median([imav[:, 0], imav[:, nx - 1]])  # left and right columns,  scalar
+        tmp = imav - backgr
+
+        itot = np.sum(tmp)  # total flux and centroids
+        xc = np.sum(tmp * xx) / itot
+        yc = np.sum(tmp * yy) / itot
+
+        imavcent = np.roll(tmp, (int(-xc), int(-yc)), (1, 0))  # crude shift by integer pixel number
+
+        radii = np.zeros(nsect)  # preliminary radii of the sectors, in pixels
+        for j in range(0, nsect):
+            radii[j] = np.sum(imavcent * rwt[j]) / np.sum(imavcent * fwt[j])
+
+        dx1 = np.sum(radii * xsect) / nsect * 2.3  # accurate x-shift
+        dy1 = np.sum(radii * ysect) / nsect * 2.3  # accurate y-shift
+
+        xc += dx1  # more accurate ring center
+        yc += dy1
+
+        # FFT sub-pixel shift by -dx1,-dy1
+        arg = 2 * np.pi * (dx1 * xx + dy1 * yy) / nx
+        imavcent = np.fft.ifft2(np.fft.fft2(imavcent) * np.fft.fftshift(np.cos(arg) + np.sin(arg) * 1j)).real
+
+        # re-compute radii to check the centering, should be similar
+        for j in range(0, nsect):
+            radii[j] = np.sum(imavcent * rwt[j]) / np.sum(imavcent * fwt[j])
+        radpix = np.sum(radii) / nsect
+
+        # Threshold the image at 0.1*max to find the ring width
+        tmp = (imavcent - 0.1 * np.max(imavcent))
+        tmp *= (tmp > 0)  # plt.imshow(tmp, cmap='Greys')
+        radvar = np.sum(tmp * (r - radpix) ** 2) / np.sum(tmp)
+        rwidth = pow(radvar, 0.5) * 2.35
+        # print("Ring width [pix]: ",rwidth)
+
+        backgr += np.median(imavcent * (r > 1.5 * radpix))  # outside-ring pixels for refined background estimate
+
+        drhopix = 1.5 * rwidth  # mask width, replace 1.5 with parameter value in the future
+        ringmask = (r >= radpix - drhopix) * (r <= radpix + drhopix)
+
+        # ### Now build the final matrix of masks
+        ncoef = 2 * nsect + 2 * (m + 1)
+        maskmat = np.zeros((ncoef, nx * nx))
+
+        for j in range(0, nsect):  # radial masks
+            maskmat[j, :] = np.ndarray.flatten(rwt[j] * ringmask)  # image pixels arranged in 1D array
+            maskmat[j + nsect, :] = np.ndarray.flatten(fwt[j] * ringmask)
+
+        for j in range(0, m + 1):  # cosine ans sine masks
+            tmp = np.cos(phi * j) * ringmask
+            if j > 0:
+                cwt = tmp - np.sum(tmp) / nx / nx  # remove residual piston
+            else:
+                cwt = tmp
+            tmp = np.sin(phi * j) * ringmask
+            swt = tmp - np.sum(tmp) / nx / nx  # remove piston
+            maskmat[2 * nsect + j, :] = np.ndarray.flatten(cwt)
+            maskmat[2 * nsect + m + 1 + j, :] = np.ndarray.flatten(swt)
+
+        # ### Main loop over the cube
+        coef = np.zeros((nz, ncoef))  # prepare the arrays for cube processing
+        xcent = np.zeros(nz)  # x-center in each frame [pix]
+        ycent = np.zeros(nz)  # y-center [pix]
+        rad = np.zeros(nz)
+        imav = np.zeros((nx, nx))  # average image
+        x0 = xc  # current ring center
+        y0 = yc
+
+        for i in range(0, nz):  # process full cube
+            tmp = data_cube[i] - backgr
+            arg = 2 * np.pi * (x0 * xx + y0 * yy) / nx  # FFT centering
+            tmp = np.fft.ifft2(np.fft.fft2(tmp) * np.fft.fftshift(np.cos(arg) + np.sin(arg) * 1j)).real
+            imav = imav + tmp
+            c = np.dot(maskmat, np.ndarray.flatten(tmp))
+            c[0:nsect] = c[0:nsect] / c[nsect:2 * nsect]
+            coef[i, :] = c
+            radii = c[0:nsect]
+            dr = np.sum(radii) / nsect
+            dx = np.sum(radii * xsect) / nsect * 2.3
+            dy = np.sum(radii * ysect) / nsect * 2.3
+            x0 += dx
+            y0 += dy
+            xcent[i] = x0
+            ycent[i] = y0
+            rad[i] = dr
+            # end of main loop
+
+        # ### Normalization and average parameters of the cube
+        imav = imav / nz  # average ring image, save as FITS file
+        # hdr = fits.Header()
+        # fits.writeto('avimage.fits', imav, hdr) # needs overwrite flag
+
+        flux = np.mean(coef[:, 2 * nsect])  # average flux in the ring [ADU]
+        coef[:, 2 * nsect:ncoef] *= 1. / flux  # normalize by the mean flux
+        fluxvar = np.std(coef[:, 2 * nsect:ncoef])
+
+        xc = np.mean(xcent)  # mean ring position and its variance
+        xcvar = np.std(xcent)
+        yc = np.mean(ycent)
+        ycvar = np.std(ycent)
+
+        cm = np.mean(coef[:, 2 * nsect + 1])  # mean cosine and sine terms to evaluate coma
+        sm = np.mean(coef[:, 2 * nsect + m + 2])
+        coma = pow((cm ** 2 + sm ** 2), 0.5)
+        angle = 180 / np.pi * np.arctan2(sm, cm)
+
+        contrast = np.zeros(nsect)  # Analog of Strehl ratio in each sector
+        for j in range(0, nsect):
+            tmp = imav * fwt[j]
+            contrast[j] = np.max(tmp) / np.sum(tmp)
+
+        contrast = np.mean(contrast)
+        meanrad = np.mean(rad)
+        impar = [backgr, flux, fluxvar, meanrad, rwidth, xc, yc, xcvar, ycvar, coma, angle, contrast]  # list object
+
+        tmp = imav / np.sum(imav)  # noise coef. of angular coefficients
+        t0 = np.sum(tmp * ringmask)
+        noise1 = np.sum(ringmask ** 2 * tmp) / t0
+        noise2 = np.sum(ringmask ** 2) / t0
+
+        tmp2 = ringmask * (r - radpix)  # noise coef. of radii
+        noise1r = np.sum(tmp * tmp2 ** 2)
+        noise2r = np.sum(tmp2 ** 2)
+        noisepar = [noise1, noise2, noise1r, noise2r]
+
+        # ###  Calculation of statistical moments
+        # Compute differential radius variance
+        dr = coef[:, 0:int(nsect / 2)] + coef[:, int(nsect / 2):nsect]  # 4 DIMM-like signals (2000,4)
+        drvar = np.var(dr, axis=0)  # 4 variances in pix^2
+        meanrvar = np.mean(drvar)
+
+        # radius noise from difference of successive dr values in 4 pairs of opposite sectors
+        ddr = dr - np.roll(dr, 1, 0)  # difference (2000,4)
+        drnoise = np.var(ddr, axis=0)  # 4 noise variances, pix^2
+
+        # Variance and covariance of angular coefficients
+        acoef = coef[:, 2 * nsect:ncoef]  # (2000,42)
+        varcoef = np.var(acoef, axis=0)  # 42 variances for m=20
+        meancoef = np.mean(acoef, axis=0)
+        tmp = acoef * np.roll(acoef, 1, 0)  # shift-1 product
+        tmp = tmp[1:nz, :]  # discard first element
+        covar = np.sum(tmp, axis=0) / (nz - 1) - meancoef ** 2
+
+        # add cosine and sine variances and covariances
+        power = varcoef[0:m + 1] + varcoef[m + 1:2 * m + 2]
+        cov = covar[0:m + 1] + covar[m + 1:2 * m + 2]
+
+        # Mean coefficients for aberrations
+        mcoef = np.zeros(nsect + 6)  # mean radii and m=1,2,3 cos/sine terms
+        mcoef[0:nsect] = np.mean(coef[:, 0:nsect], axis=0)
+        mcoef[nsect:nsect + 3] = meancoef[1:4]
+        mcoef[nsect + 3:nsect + 6] = meancoef[m + 2:m + 5]
+
+        # format output
+        moments = {'var': power.tolist(), 'cov': cov.tolist(), 'rnoise': drnoise[0], 'rvar': meanrvar,
+                   'mcoef': mcoef.tolist()}
+        data = {'image': {'impar': impar, 'noisepar': noisepar}, 'moments': moments}
+
+        return data, imav
 
 
 # ### Main module. usage: > python <par> <data>
@@ -242,11 +462,11 @@ if __name__ == "__main__":
         sys.exit()
 
     parameters_filename = sys.argv[1]
-    moments = ReadMoments(parameters_filename)
+    moment = ReadMoments(parameters_filename)
 
     stm_filename = sys.argv[2]
     print('STM file: ' + stm_filename)
 
     # Ingest all information needed
 
-    moments.read_from_file(stm_filename)
+    moment.read_from_file(stm_filename)

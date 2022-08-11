@@ -4,8 +4,7 @@
 import os
 import sys
 # import cube2
-import getzen
-import profrest5
+from ringss_restore_profile.legacy import profrest5, getzen
 import json
 import codecs
 

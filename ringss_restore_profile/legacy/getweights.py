@@ -4,7 +4,7 @@ import numpy as np
 import json
 import codecs
 import sys
-import aweight
+from ringss_restore_profile.restore_profile import aweight
 from ringss_restore_profile.restore_profile.core import read_json
 
 

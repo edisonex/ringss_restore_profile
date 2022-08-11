@@ -24,7 +24,7 @@ class Star(object):
         alt_az = coo.transform_to(AltAz(obstime=time, location=location))
         zen = 90. - alt_az.alt.degree
         az = alt_az.az.degree
-        star_parameters = {"JD": jd, "HR": int(hr_number), "Vmag": float(star_by_hr[2]), "BV": float(star_by_hr[3]), "zen": zen,
-                           "az": az}  # starpar dictionary
+        star_parameters = {"JD": jd, "HR": int(hr_number), "Vmag": float(star_by_hr[2]), "BV": float(star_by_hr[3]),
+                           "zen": zen, "az": az}
         return star_parameters
 
